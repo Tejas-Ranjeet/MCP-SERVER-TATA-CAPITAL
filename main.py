@@ -1,4 +1,5 @@
 # mcp_server/main.py
+
 import os
 import json
 import uuid
@@ -9,13 +10,39 @@ from pydantic import BaseModel
 from reportlab.pdfgen import canvas
 from datetime import datetime
 
-# Config
+# Storage directory
 STORAGE_DIR = os.environ.get("MCP_STORAGE_DIR", "./storage")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 app = FastAPI(title="NBFC MCP Server")
 
-# --- Mock data: 10 synthetic customers
+# ============================================================
+# ROOT ROUTE (Fix for Railway & Browser)
+# ============================================================
+@app.get("/")
+def root():
+    return {
+        "message": "NBFC MCP Server is running",
+        "available_routes": [
+            "/",
+            "/health",
+            "/tools",
+            "/resource/{filename}",
+            "/call/get_customer_info",
+            "/call/verify_kyc",
+            "/call/get_credit_score",
+            "/call/underwrite_loan",
+            "/call/upload_salary_slip",
+            "/call/generate_sanction_letter",
+            "/call/log_event"
+        ],
+        "status": "ok"
+    }
+
+
+# ============================================================
+#   MOCK CUSTOMER DATA (10 synthetic customers)
+# ============================================================
 CUSTOMERS = {
     "CUST001": {"customer_id":"CUST001","name":"Asha Verma","age":32,"city":"Pune","phone":"9810000001","email":"asha@example.com","pre_approved_limit":300000,"salary_monthly":60000,"credit_score":745},
     "CUST002": {"customer_id":"CUST002","name":"Rahul Sharma","age":29,"city":"Delhi","phone":"9810000002","email":"rahul@example.com","pre_approved_limit":200000,"salary_monthly":45000,"credit_score":712},
@@ -29,7 +56,10 @@ CUSTOMERS = {
     "CUST010": {"customer_id":"CUST010","name":"Sourav Ghosh","age":36,"city":"Kolkata","phone":"9810000010","email":"sourav@example.com","pre_approved_limit":500000,"salary_monthly":90000,"credit_score":790}
 }
 
-# Tools manifest
+
+# ============================================================
+# TOOLS MANIFEST
+# ============================================================
 @app.get("/tools")
 def get_tools():
     tools = [
@@ -37,21 +67,24 @@ def get_tools():
             "name": "get_customer_info",
             "description": "Fetch customer basic info",
             "input_schema": {
-                "type":"object",
-                "properties":{"customer_id":{"type":"string"}},
-                "required":["customer_id"]
+                "type": "object",
+                "properties": {"customer_id": {"type": "string"}},
+                "required": ["customer_id"]
             }
         },
-        {"name":"verify_kyc","description":"Verify phone/address (mock)"},
-        {"name":"get_credit_score","description":"Return credit score for customer"},
-        {"name":"underwrite_loan","description":"Underwriting decision using stated rules"},
-        {"name":"upload_salary_slip","description":"Upload salary slip file"},
-        {"name":"generate_sanction_letter","description":"Generate sanction PDF"},
-        {"name":"log_event","description":"Audit log an event"}
+        {"name": "verify_kyc", "description": "Verify phone/address (mock)"},
+        {"name": "get_credit_score", "description": "Return credit score"},
+        {"name": "underwrite_loan", "description": "Loan underwriting"},
+        {"name": "upload_salary_slip", "description": "Upload salary slip"},
+        {"name": "generate_sanction_letter", "description": "Generate PDF"},
+        {"name": "log_event", "description": "Audit log event"}
     ]
     return {"tools": tools}
 
-# Models
+
+# ============================================================
+# MODELS
+# ============================================================
 class UnderwriteInput(BaseModel):
     customer_id: str
     requested_amount: int
@@ -60,7 +93,11 @@ class UnderwriteInput(BaseModel):
     salary_provided: int = None
     salary_slip_resource: str = None
 
-# Tool: get_customer_info
+
+# ============================================================
+# TOOL ENDPOINTS
+# ============================================================
+
 @app.post("/call/get_customer_info")
 def call_get_customer_info(payload: Dict[str, Any]):
     cid = payload.get("customer_id")
@@ -69,9 +106,9 @@ def call_get_customer_info(payload: Dict[str, Any]):
     cust = CUSTOMERS.get(cid)
     if not cust:
         raise HTTPException(status_code=404, detail="customer not found")
-    return {"status":"ok","result":cust}
+    return {"status": "ok", "result": cust}
 
-# Tool: verify_kyc
+
 @app.post("/call/verify_kyc")
 def call_verify_kyc(payload: Dict[str, Any]):
     cid = payload.get("customer_id")
@@ -81,10 +118,11 @@ def call_verify_kyc(payload: Dict[str, Any]):
     cust = CUSTOMERS.get(cid)
     if not cust:
         raise HTTPException(status_code=404, detail="customer not found")
-    phone_verified = (cust.get("phone") == phone)
-    return {"status":"ok","result":{"phone_verified":phone_verified,"address_verified":True}}
 
-# Tool: get_credit_score
+    phone_verified = (cust.get("phone") == phone)
+    return {"status": "ok", "result": {"phone_verified": phone_verified, "address_verified": True}}
+
+
 @app.post("/call/get_credit_score")
 def call_get_credit_score(payload: Dict[str, Any]):
     cid = payload.get("customer_id")
@@ -93,18 +131,17 @@ def call_get_credit_score(payload: Dict[str, Any]):
     cust = CUSTOMERS.get(cid)
     if not cust:
         raise HTTPException(status_code=404)
-    return {"status":"ok","result":{"credit_score":cust.get("credit_score")}}
+    return {"status": "ok", "result": {"credit_score": cust.get("credit_score")}}
 
-# EMI helper
+
+# EMI calculation
 def compute_emi(P: float, annual_rate: float, n_months: int) -> float:
     r = annual_rate / 12.0 / 100.0
     if r == 0:
         return P / n_months
-    num = P * r * (1 + r) ** n_months
-    den = (1 + r) ** n_months - 1
-    return num / den
+    return (P * r * (1 + r) ** n_months) / ((1 + r) ** n_months - 1)
 
-# Tool: underwrite_loan
+
 @app.post("/call/underwrite_loan")
 def call_underwrite_loan(payload: UnderwriteInput):
     data = payload
@@ -117,30 +154,30 @@ def call_underwrite_loan(payload: UnderwriteInput):
     pre_limit = cust.get("pre_approved_limit", 0)
     requested = data.requested_amount
     tenure = data.tenure_months
-    annual_rate = data.annual_rate
+    rate = data.annual_rate
 
     if score < 700:
-        return {"status":"ok","result":{"decision":"reject","reason":"credit_score_below_700","credit_score":score}}
+        return {"status": "ok", "result": {"decision": "reject", "reason": "credit_score_below_700", "credit_score": score}}
 
     if requested <= pre_limit:
-        emi = compute_emi(requested, annual_rate, tenure)
-        return {"status":"ok","result":{"decision":"approve","emi":emi,"reason":"within_pre_approved_limit"}}
+        emi = compute_emi(requested, rate, tenure)
+        return {"status": "ok", "result": {"decision": "approve", "emi": emi, "reason": "within_pre_approved_limit"}}
 
     if requested <= 2 * pre_limit:
         if not data.salary_slip_resource and not data.salary_provided:
-            return {"status":"ok","result":{"decision":"require_salary_slip","reason":"salary_slip_required"}}
+            return {"status": "ok", "result": {"decision": "require_salary_slip", "reason": "salary_slip_required"}}
 
-        salary = data.salary_provided if data.salary_provided is not None else cust.get("salary_monthly", 0)
-        emi = compute_emi(requested, annual_rate, tenure)
+        salary = data.salary_provided or cust.get("salary_monthly", 0)
+        emi = compute_emi(requested, rate, tenure)
 
         if emi <= 0.5 * salary:
-            return {"status":"ok","result":{"decision":"approve","emi":emi,"reason":"emi_within_50pct_salary"}}
+            return {"status": "ok", "result": {"decision": "approve", "emi": emi, "reason": "emi_within_50pct_salary"}}
         else:
-            return {"status":"ok","result":{"decision":"reject","reason":"emi_exceeds_50pct_salary","emi":emi,"salary_monthly":salary}}
+            return {"status": "ok", "result": {"decision": "reject", "reason": "emi_exceeds_50pct_salary", "emi": emi}}
 
-    return {"status":"ok","result":{"decision":"reject","reason":"amount_exceeds_2x_pre_approved","pre_limit":pre_limit,"requested":requested}}
+    return {"status": "ok", "result": {"decision": "reject", "reason": "amount_exceeds_2x_pre_approved", "pre_limit": pre_limit}}
 
-# Tool: upload_salary_slip
+
 @app.post("/call/upload_salary_slip")
 async def call_upload_salary_slip(customer_id: str = None, file: UploadFile = File(...)):
     if not customer_id:
@@ -153,13 +190,11 @@ async def call_upload_salary_slip(customer_id: str = None, file: UploadFile = Fi
     path = os.path.join(STORAGE_DIR, filename)
 
     with open(path, "wb") as f:
-        contents = await file.read()
-        f.write(contents)
+        f.write(await file.read())
 
-    resource_url = f"resource://{filename}"
-    return {"status":"ok","result":{"resource":resource_url,"path":path}}
+    return {"status": "ok", "result": {"resource": f"resource://{filename}", "path": path}}
 
-# Tool: generate_sanction_letter
+
 @app.post("/call/generate_sanction_letter")
 def call_generate_sanction_letter(payload: Dict[str, Any]):
     cid = payload.get("customer_id")
@@ -178,19 +213,18 @@ def call_generate_sanction_letter(payload: Dict[str, Any]):
     c = canvas.Canvas(path)
     c.setFont("Helvetica-Bold", 14)
     c.drawString(50, 800, "Sanction Letter")
-    c.setFont("Helvetica", 11)
-    c.drawString(50, 770, f"Date: {datetime.utcnow().strftime('%Y-%m-%d')}")
-    c.drawString(50, 750, f"Customer: {cust.get('name')} (ID: {cid})")
-    c.drawString(50, 730, f"Approved Amount: INR {amount}")
-    c.drawString(50, 710, f"Tenure: {payload.get('tenure_months', 36)} months")
-    c.drawString(50, 690, f"Interest Rate (annual): {payload.get('interest_rate', 12.0)}%")
-    c.drawString(50, 660, "This is a demo sanction letter generated by MCP server.")
+    c.setFont("Helvetica", 10)
+    c.drawString(50, 780, f"Date: {datetime.utcnow().strftime('%Y-%m-%d')}")
+    c.drawString(50, 760, f"Customer: {cust.get('name')} (ID: {cid})")
+    c.drawString(50, 740, f"Approved Amount: INR {amount}")
+    c.drawString(50, 720, f"Tenure: {payload.get('tenure_months', 36)} months")
+    c.drawString(50, 700, f"Interest Rate: {payload.get('interest_rate', 12.0)}%")
+    c.drawString(50, 660, "This is a demo sanction letter generated by MCP Server.")
     c.save()
 
-    resource_url = f"resource://{filename}"
-    return {"status":"ok","result":{"resource":resource_url,"path":path}}
+    return {"status": "ok", "result": {"resource": f"resource://{filename}", "path": path}}
 
-# Fetch stored resource
+
 @app.get("/resource/{filename}")
 def fetch_resource(filename: str):
     path = os.path.join(STORAGE_DIR, filename)
@@ -198,19 +232,30 @@ def fetch_resource(filename: str):
         raise HTTPException(status_code=404)
     return FileResponse(path)
 
-# Log event
+
 @app.post("/call/log_event")
 def call_log_event(payload: Dict[str, Any]):
     with open(os.path.join(STORAGE_DIR, "mcp_audit.log"), "a") as f:
         f.write(json.dumps({"ts": datetime.utcnow().isoformat(), "event": payload}) + "\n")
-    return {"status":"ok"}
+    return {"status": "ok"}
 
-# Health
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 @app.get("/health")
 def health():
-    return {"status":"ok","time": datetime.utcnow().isoformat()}
+    return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
-# Main entry
+
+# ============================================================
+# RAILWAY ENTRY POINT
+# ============================================================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "mcp_server.main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        reload=False
+    )
